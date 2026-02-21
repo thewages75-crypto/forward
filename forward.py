@@ -77,7 +77,89 @@ def is_system_open():
     return cursor.fetchone()[0] == '1'
 
 # ===== USER REQUEST ACCESS =====
+# ===== ADMIN ADD ROUTE =====
 
+@bot.message_handler(commands=['addroute'])
+def add_route(message):
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.split()
+
+    if len(parts) < 3:
+        bot.reply_to(message, "Usage: /addroute <source_chat> <target_chat> [mode]")
+        return
+
+    source_chat = int(parts[1])
+    target_chat = int(parts[2])
+
+    mode = 0
+    if len(parts) >= 4:
+        mode = int(parts[3])
+        if mode not in (0, 1, 2):
+            bot.reply_to(message, "Mode must be 0, 1, or 2.")
+            return
+
+    cursor.execute(
+        "INSERT INTO routes (source_chat, target_chat, anon_mode) VALUES (?, ?, ?)",
+        (source_chat, target_chat, mode)
+    )
+    conn.commit()
+
+    bot.reply_to(message, f"Route added:\n{source_chat} → {target_chat}\nMode: {mode}")
+# ===== ADMIN REMOVE ROUTE =====
+
+@bot.message_handler(commands=['removeroute'])
+def remove_route(message):
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.split()
+
+    if len(parts) < 3:
+        bot.reply_to(message, "Usage: /removeroute <source_chat> <target_chat>")
+        return
+
+    source_chat = int(parts[1])
+    target_chat = int(parts[2])
+
+    cursor.execute(
+        "DELETE FROM routes WHERE source_chat=? AND target_chat=?",
+        (source_chat, target_chat)
+    )
+    conn.commit()
+
+    bot.reply_to(message, f"Route removed:\n{source_chat} → {target_chat}")
+    
+# ===== ADMIN LIST ROUTES =====
+
+@bot.message_handler(commands=['listroutes'])
+def list_routes(message):
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    cursor.execute("SELECT source_chat, target_chat, anon_mode FROM routes")
+    rows = cursor.fetchall()
+
+    if not rows:
+        bot.reply_to(message, "No routes configured.")
+        return
+
+    text = "Configured Routes:\n\n"
+
+    for source, target, mode in rows:
+        text += f"{source} → {target} | Mode: {mode}\n"
+
+    bot.reply_to(message, text)
 @bot.message_handler(commands=['request'])
 def request_access(message):
     if message.chat.type != "private":
