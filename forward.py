@@ -139,15 +139,9 @@ def forward_handler(message):
             bot.forward_message(target, message.chat.id, message.message_id)
         except Exception as e:
             print("Forward error:", e)
-import telebot
-
-BOT_TOKEN = "8506525365:AAFp3b9_TBam2bE2d5838mqh1ZNKe7aVYVU"
-bot = telebot.TeleBot(BOT_TOKEN)
-
-@bot.message_handler(func=lambda message: True)
-def get_chat_id(message):
-    print("Chat ID:", message.chat.id)
-
+            
+print("Bot Running...")
+bot.infinity_polling()
 bot.polling()
 print("Bot Running...")
 bot.infinity_polling()
