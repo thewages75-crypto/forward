@@ -1,7 +1,7 @@
 import telebot
 import sqlite3
 
-BOT_TOKEN = "YOUR_TOKEN"
+BOT_TOKEN = "8506525365:AAFp3b9_TBam2bE2d5838mqh1ZNKe7aVYVU"
 ADMIN_ID = 8031705675  # your telegram id
 
 bot = telebot.TeleBot(BOT_TOKEN)
