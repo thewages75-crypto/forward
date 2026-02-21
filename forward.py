@@ -405,56 +405,97 @@ def text_on(message):
 
 # ===== MENU COMMAND =====
 
+# ===== UPDATED MENU COMMAND =====
+
 @bot.message_handler(commands=['menu'])
 def show_menu(message):
 
     user_id = message.from_user.id
     chat_type = message.chat.type
 
-    # ---- PRIVATE CHAT ----
+    # =========================
+    # PRIVATE CHAT MENU
+    # =========================
     if chat_type == "private":
 
+        # ---- ADMIN MENU ----
         if is_admin(user_id):
-            text = """
-📌 ADMIN COMMANDS:
 
+            text = """
+👑 ADMIN PANEL
+
+🔹 Registration Control
+/open - Open registration
+/close - Close registration
+/pending - View pending users
 /approve <user_id>
 /removeuser <user_id>
-/open
-/close
-/global_stop
-/global_start
-/addroute <source> <target> <mode>
-/removeroute <source> <target>
+
+🔹 Routing
+(from & target are used inside groups)
 /listroutes
 /stats
-"""
-        else:
-            text = """
-📌 USER COMMANDS:
 
-/request - Request access
-/menu - Show this menu
+🔹 System Control
+/global_start
+/global_stop
 """
-        bot.reply_to(message, text)
+
+        # ---- NORMAL USER MENU ----
+        else:
+            cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
+            row = cursor.fetchone()
+
+            if row and row[0] == 1:
+                status = "✅ Approved"
+            elif row:
+                status = "⏳ Pending"
+            else:
+                status = "❌ Not Registered"
+
+            text = f"""
+📡 Forwarding System
+
+Status: {status}
+
+To use the system:
+• Ask admin to approve you.
+• Use group commands inside linked groups.
+
+/start - View status
+"""
+
+        bot.send_message(message.chat.id, text)
         return
 
-    # ---- GROUP CHAT ----
+    # =========================
+    # GROUP MENU
+    # =========================
+
     if not can_user_use_system(user_id):
         return
 
     text = """
-📌 GROUP USER COMMANDS:
+📌 GROUP COMMANDS
 
-/anon_semi
-/anon_total
-/anon_off
-/stop
-/start
-/text_on
-/text_off
-/menu
+🔗 Linking (Admin Only)
+/from - Mark this group as source
+/target - Mark this group as target
+
+🎭 Anonymous Modes
+/anon_semi - Hide forward tag
+/anon_total - Hide tag + caption
+/anon_off - Disable anonymous
+
+⏸ Forward Control
+/stop - Stop forwarding (you only)
+/start - Resume forwarding
+
+💬 Text Control
+/text_on - Enable text forwarding
+/text_off - Disable text forwarding
 """
+
     bot.reply_to(message, text)
 # ===== ADMIN STATS =====
 
