@@ -531,16 +531,21 @@ def start_command(message):
 
     user_id = message.from_user.id
 
-    cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
-    row = cursor.fetchone()
+    # Admin always approved
+    if is_admin(user_id):
+        status_text = "👑 Admin"
 
-    status_text = "❌ Not Registered"
+    else:
+        cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
+        row = cursor.fetchone()
 
-    if row:
-        if row[0] == 1:
-            status_text = "✅ Approved"
-        else:
-            status_text = "⏳ Pending Approval"
+        status_text = "❌ Not Registered"
+
+        if row:
+            if row[0] == 1:
+                status_text = "✅ Approved"
+            else:
+                status_text = "⏳ Pending Approval"
 
     text = f"""
 📡 Forwarding System
