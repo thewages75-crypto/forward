@@ -141,7 +141,7 @@ def forward_handler(message):
             print("Forward error:", e)
 import telebot
 
-BOT_TOKEN = "YOUR_TOKEN"
+BOT_TOKEN = "8506525365:AAFp3b9_TBam2bE2d5838mqh1ZNKe7aVYVU"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 @bot.message_handler(func=lambda message: True)
