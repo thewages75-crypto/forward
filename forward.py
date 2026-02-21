@@ -56,6 +56,28 @@ cursor.execute("INSERT OR IGNORE INTO settings VALUES ('forwarding_enabled','1')
 conn.commit()
 # ===== ACCESS CONTROL HELPERS =====
 
+
+# ===== TOTAL ANONYMOUS SENDER =====
+
+def send_total_anonymous(message, target):
+
+    if message.content_type == "photo":
+        bot.send_photo(target, message.photo[-1].file_id)
+
+    elif message.content_type == "video":
+        bot.send_video(target, message.video.file_id)
+
+    elif message.content_type == "document":
+        bot.send_document(target, message.document.file_id)
+
+    elif message.content_type == "audio":
+        bot.send_audio(target, message.audio.file_id)
+
+    elif message.content_type == "voice":
+        bot.send_voice(target, message.voice.file_id)
+
+    elif message.content_type == "animation":
+        bot.send_animation(target, message.animation.file_id)
 # ===== GLOBAL FORWARDING CHECK =====
 
 def is_global_forwarding_enabled():
@@ -92,9 +114,13 @@ def add_route(message):
     if len(parts) < 3:
         bot.reply_to(message, "Usage: /addroute <source_chat> <target_chat> [mode]")
         return
+    try:
+        source_chat = int(parts[1])
+        target_chat = int(parts[2])
 
-    source_chat = int(parts[1])
-    target_chat = int(parts[2])
+    except ValueError:
+        bot.reply_to(message, "Invalid chat IDs.")
+        return
 
     mode = 0
     if len(parts) >= 4:
@@ -308,5 +334,80 @@ def global_start(message):
     conn.commit()
 
     bot.reply_to(message, "Global forwarding ENABLED.")
+    
+# ===== FORWARDING ENGINE =====
+
+@bot.message_handler(func=lambda message: True, content_types=[
+    'text','photo','video','document','audio','voice','animation'
+])
+def forward_engine(message):
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    # ---- Global Forwarding Check ----
+    if not is_global_forwarding_enabled():
+        return
+
+    # ---- System Access Check ----
+    if not is_system_open():
+        if not is_user_approved(user_id):
+            return
+
+    # ---- Route Exists Check ----
+    cursor.execute(
+        "SELECT target_chat, anon_mode FROM routes WHERE source_chat=?",
+        (source_chat,)
+    )
+    routes = cursor.fetchall()
+
+    if not routes:
+        return
+
+    # ---- User Group Override ----
+    cursor.execute("""
+        SELECT anon_mode, forwarding_enabled, forward_text
+        FROM user_group_modes
+        WHERE user_id=? AND source_chat=?
+    """, (user_id, source_chat))
+
+    override = cursor.fetchone()
+
+    if override:
+        user_anon_mode, user_forward_enabled, user_forward_text = override
+
+        if user_forward_enabled == 0:
+            return
+    else:
+        user_anon_mode = 0
+        user_forward_text = 0
+
+    # ---- Text Rule ----
+    if message.content_type == "text":
+        if not override or user_forward_text == 0:
+            return
+
+    # ---- Forward Loop ----
+    for target_chat, route_mode in routes:
+
+        final_mode = user_anon_mode if user_anon_mode != 0 else route_mode
+
+        # Block total anonymous text
+        if message.content_type == "text" and final_mode == 2:
+            continue
+
+        try:
+            if final_mode == 0:
+                bot.forward_message(target_chat, source_chat, message.message_id)
+
+            elif final_mode == 1:
+                bot.copy_message(target_chat, source_chat, message.message_id)
+
+            elif final_mode == 2:
+                send_total_anonymous(message, target_chat)
+
+        except Exception as e:
+            print("Forward error:", e)
+            
 print("Bot is running...")
 bot.infinity_polling()
