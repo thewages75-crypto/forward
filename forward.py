@@ -56,7 +56,12 @@ cursor.execute("INSERT OR IGNORE INTO settings VALUES ('forwarding_enabled','1')
 conn.commit()
 # ===== ACCESS CONTROL HELPERS =====
 
+# ===== CHECK USER ACCESS FOR GROUP COMMANDS =====
 
+def can_user_use_system(user_id):
+    if is_system_open():
+        return True
+    return is_user_approved(user_id)
 # ===== TOTAL ANONYMOUS SENDER =====
 
 def send_total_anonymous(message, target):
@@ -334,6 +339,267 @@ def global_start(message):
     conn.commit()
 
     bot.reply_to(message, "Global forwarding ENABLED.")
+# ===== USER TEXT ON =====
+
+@bot.message_handler(commands=['text_on'])
+def text_on(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, forward_text)
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET forward_text=1
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Text forwarding enabled for this group.")
+
+# ===== MENU COMMAND =====
+
+@bot.message_handler(commands=['menu'])
+def show_menu(message):
+
+    user_id = message.from_user.id
+    chat_type = message.chat.type
+
+    # ---- PRIVATE CHAT ----
+    if chat_type == "private":
+
+        if is_admin(user_id):
+            text = """
+📌 ADMIN COMMANDS:
+
+/approve <user_id>
+/removeuser <user_id>
+/open
+/close
+/global_stop
+/global_start
+/addroute <source> <target> <mode>
+/removeroute <source> <target>
+/listroutes
+/stats
+"""
+        else:
+            text = """
+📌 USER COMMANDS:
+
+/request - Request access
+/menu - Show this menu
+"""
+        bot.reply_to(message, text)
+        return
+
+    # ---- GROUP CHAT ----
+    if not can_user_use_system(user_id):
+        return
+
+    text = """
+📌 GROUP USER COMMANDS:
+
+/anon_semi
+/anon_total
+/anon_off
+/stop
+/start
+/text_on
+/text_off
+/menu
+"""
+    bot.reply_to(message, text)
+# ===== ADMIN STATS =====
+
+@bot.message_handler(commands=['stats'])
+def stats(message):
+
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    # Approved users
+    cursor.execute("SELECT COUNT(*) FROM users WHERE approved=1")
+    approved_count = cursor.fetchone()[0]
+
+    # Total routes
+    cursor.execute("SELECT COUNT(*) FROM routes")
+    route_count = cursor.fetchone()[0]
+
+    # Total overrides
+    cursor.execute("SELECT COUNT(*) FROM user_group_modes")
+    override_count = cursor.fetchone()[0]
+
+    # System settings
+    system_status = "OPEN" if is_system_open() else "CLOSED"
+    forwarding_status = "ON" if is_global_forwarding_enabled() else "OFF"
+
+    text = f"""
+📊 SYSTEM STATS
+
+Approved Users: {approved_count}
+Routes: {route_count}
+User Overrides: {override_count}
+
+System: {system_status}
+Global Forwarding: {forwarding_status}
+"""
+
+    bot.reply_to(message, text)
+# ===== USER TEXT OFF =====
+
+@bot.message_handler(commands=['text_off'])
+def text_off(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, forward_text)
+        VALUES (?, ?, 0)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET forward_text=0
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Text forwarding disabled for this group.")
+# ===== USER START FORWARDING =====
+
+@bot.message_handler(commands=['start'])
+def start_forwarding(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, forwarding_enabled)
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET forwarding_enabled=1
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Forwarding resumed for you in this group.")
+# ===== USER STOP FORWARDING =====
+
+@bot.message_handler(commands=['stop'])
+def stop_forwarding(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, forwarding_enabled)
+        VALUES (?, ?, 0)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET forwarding_enabled=0
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Forwarding stopped for you in this group.")
+# ===== USER ANON OFF =====
+
+@bot.message_handler(commands=['anon_off'])
+def anon_off(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, anon_mode)
+        VALUES (?, ?, 0)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET anon_mode=0
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Anonymous mode disabled for this group.")
+# ===== USER ANON TOTAL =====
+
+@bot.message_handler(commands=['anon_total'])
+def anon_total(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, anon_mode)
+        VALUES (?, ?, 2)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET anon_mode=2
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Total anonymous mode enabled for this group.")
+# ===== USER ANON SEMI =====
+
+@bot.message_handler(commands=['anon_semi'])
+def anon_semi(message):
+
+    if message.chat.type == "private":
+        return
+
+    user_id = message.from_user.id
+    source_chat = message.chat.id
+
+    if not can_user_use_system(user_id):
+        return
+
+    cursor.execute("""
+        INSERT INTO user_group_modes (user_id, source_chat, anon_mode)
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, source_chat)
+        DO UPDATE SET anon_mode=1
+    """, (user_id, source_chat))
+
+    conn.commit()
+
+    bot.reply_to(message, "Semi-anonymous mode enabled for this group.")
     
 # ===== FORWARDING ENGINE =====
 
@@ -341,8 +607,9 @@ def global_start(message):
     'text','photo','video','document','audio','voice','animation'
 ])
 def forward_engine(message):
-        
-    print("Source Chat:", message.chat.id)
+    # ---- Ignore Bot Messages (Anti-loop) ----
+    if message.from_user and message.from_user.is_bot:
+        return
     user_id = message.from_user.id
     source_chat = message.chat.id
 
