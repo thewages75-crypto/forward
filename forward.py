@@ -341,7 +341,8 @@ def global_start(message):
     'text','photo','video','document','audio','voice','animation'
 ])
 def forward_engine(message):
-
+        
+    print("Source Chat:", message.chat.id)
     user_id = message.from_user.id
     source_chat = message.chat.id
 
