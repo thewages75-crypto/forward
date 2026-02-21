@@ -1,17 +1,24 @@
 import telebot
 import sqlite3
 from telebot.types import BotCommand
-
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 BOT_TOKEN = "8330293981:AAFTEqKOPNMQtonlVE-xnomlPzsAXVVd-Pg"
 ADMIN_ID = 8352768379  # your telegram id
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
+# ===== ALBUM TEMP STORAGE =====
+album_buffer = {}
 # ===== DATABASE SETUP =====
 
 conn = sqlite3.connect("forward.db", check_same_thread=False)
 cursor = conn.cursor()
-
+# ===== TEMP LINK STATE =====
+link_state = {
+    "from": None,
+    "target": None,
+    "from_confirmed": False,
+    "target_confirmed": False
+}
 # ----- USERS TABLE -----
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -48,14 +55,16 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 )
 """)
-
+cursor.execute("INSERT OR IGNORE INTO settings VALUES ('registration_open','1')")
 # Insert default global settings
 cursor.execute("INSERT OR IGNORE INTO settings VALUES ('system_open','0')")
 cursor.execute("INSERT OR IGNORE INTO settings VALUES ('forwarding_enabled','1')")
 
 conn.commit()
 # ===== ACCESS CONTROL HELPERS =====
-
+def is_registration_open():
+    cursor.execute("SELECT value FROM settings WHERE key='registration_open'")
+    return cursor.fetchone()[0] == '1'
 # ===== CHECK USER ACCESS FOR GROUP COMMANDS =====
 
 def can_user_use_system(user_id):
@@ -228,6 +237,7 @@ def approve_user(message):
     conn.commit()
 
     bot.reply_to(message, f"User {user_id} approved.")
+    bot.send_message(user_id, "You have been approved. You can now use the bot.")
 # ===== ADMIN REMOVE USER =====
 
 @bot.message_handler(commands=['removeuser'])
@@ -280,37 +290,66 @@ def close_system(message):
 
     bot.reply_to(message, "System is now CLOSED.")
     
-# ===== ADMIN OPEN SYSTEM =====
+# ===== ADMIN OPEN REGISTRATION =====
 
 @bot.message_handler(commands=['open'])
-def open_system(message):
+def open_registration(message):
+
     if message.chat.type != "private":
         return
 
     if not is_admin(message.from_user.id):
         return
 
-    cursor.execute("UPDATE settings SET value='1' WHERE key='system_open'")
+    cursor.execute("UPDATE settings SET value='1' WHERE key='registration_open'")
     conn.commit()
 
-    bot.reply_to(message, "System is now OPEN.")
+    bot.reply_to(message, "Registration is now OPEN.")
+# ===== MARK SOURCE GROUP =====
 
+@bot.message_handler(commands=['from'])
+def mark_from(message):
 
-# ===== ADMIN CLOSE SYSTEM =====
+    if message.chat.type == "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    link_state["from"] = message.chat.id
+    link_state["from_confirmed"] = False
+
+    bot.reply_to(message, "Source group marked. Send one normal message to confirm.")
+# ===== MARK TARGET GROUP =====
+
+@bot.message_handler(commands=['target'])
+def mark_target(message):
+
+    if message.chat.type == "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    link_state["target"] = message.chat.id
+    link_state["target_confirmed"] = False
+
+    bot.reply_to(message, "Target group marked. Send one normal message to confirm.")
+# ===== ADMIN CLOSE REGISTRATION =====
 
 @bot.message_handler(commands=['close'])
-def close_system(message):
+def close_registration(message):
+
     if message.chat.type != "private":
         return
 
     if not is_admin(message.from_user.id):
         return
 
-    cursor.execute("UPDATE settings SET value='0' WHERE key='system_open'")
+    cursor.execute("UPDATE settings SET value='0' WHERE key='registration_open'")
     conn.commit()
 
-    bot.reply_to(message, "System is now CLOSED.")
-    
+    bot.reply_to(message, "Registration is now CLOSED.")
 # ===== ADMIN GLOBAL STOP =====
 
 @bot.message_handler(commands=['global_stop'])
@@ -482,28 +521,46 @@ def text_off(message):
     bot.reply_to(message, "Text forwarding disabled for this group.")
 # ===== USER START FORWARDING =====
 
-@bot.message_handler(commands=['start'])
-def start_forwarding(message):
+# ===== START COMMAND =====
 
-    if message.chat.type == "private":
+@bot.message_handler(commands=['start'])
+def start_command(message):
+
+    if message.chat.type != "private":
         return
 
     user_id = message.from_user.id
-    source_chat = message.chat.id
 
-    if not can_user_use_system(user_id):
-        return
+    cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
 
-    cursor.execute("""
-        INSERT INTO user_group_modes (user_id, source_chat, forwarding_enabled)
-        VALUES (?, ?, 1)
-        ON CONFLICT(user_id, source_chat)
-        DO UPDATE SET forwarding_enabled=1
-    """, (user_id, source_chat))
+    status_text = "❌ Not Registered"
 
-    conn.commit()
+    if row:
+        if row[0] == 1:
+            status_text = "✅ Approved"
+        else:
+            status_text = "⏳ Pending Approval"
 
-    bot.reply_to(message, "Forwarding resumed for you in this group.")
+    text = f"""
+📡 Forwarding System
+
+Status: {status_text}
+
+This bot forwards media between configured groups.
+
+To use the system, you must request access.
+"""
+
+    markup = InlineKeyboardMarkup()
+
+    if not row and is_registration_open():
+        markup.add(InlineKeyboardButton("Request Access", callback_data="request_access"))
+
+    if not is_registration_open():
+        text += "\n\n🚫 Registration is currently closed."
+
+    bot.send_message(message.chat.id, text, reply_markup=markup)
 # ===== USER STOP FORWARDING =====
 
 @bot.message_handler(commands=['stop'])
@@ -576,6 +633,46 @@ def anon_total(message):
     conn.commit()
 
     bot.reply_to(message, "Total anonymous mode enabled for this group.")
+# ===== REQUEST ACCESS BUTTON =====
+
+@bot.callback_query_handler(func=lambda call: call.data == "request_access")
+def handle_request(call):
+
+    user_id = call.from_user.id
+
+    if not is_registration_open():
+        bot.answer_callback_query(call.id, "Registration is closed.")
+        return
+
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, approved) VALUES (?, 0)", (user_id,))
+    conn.commit()
+
+    bot.answer_callback_query(call.id, "Request submitted.")
+    bot.send_message(user_id, "✅ Your request has been submitted. Please wait for admin approval.")
+# ===== ADMIN VIEW PENDING USERS =====
+
+@bot.message_handler(commands=['pending'])
+def pending_users(message):
+
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    cursor.execute("SELECT user_id FROM users WHERE approved=0")
+    rows = cursor.fetchall()
+
+    if not rows:
+        bot.reply_to(message, "No pending users.")
+        return
+
+    text = "Pending Users:\n\n"
+
+    for (user_id,) in rows:
+        text += f"{user_id}\n"
+
+    bot.reply_to(message, text)
 # ===== USER ANON SEMI =====
 
 @bot.message_handler(commands=['anon_semi'])
@@ -600,13 +697,152 @@ def anon_semi(message):
     conn.commit()
 
     bot.reply_to(message, "Semi-anonymous mode enabled for this group.")
-    
+# ===== PROCESS MEDIA GROUP =====
+from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument
+
+def process_media_group(messages):
+
+    first_message = messages[0]
+    user_id = first_message.from_user.id
+    source_chat = first_message.chat.id
+
+    # Global forwarding check
+    if not is_global_forwarding_enabled():
+        return
+
+    # Access check
+    if not is_system_open() and not is_user_approved(user_id):
+        return
+
+    # Get routes
+    cursor.execute(
+        "SELECT target_chat, anon_mode FROM routes WHERE source_chat=?",
+        (source_chat,)
+    )
+    routes = cursor.fetchall()
+
+    if not routes:
+        return
+
+    # User override
+    cursor.execute("""
+        SELECT anon_mode, forwarding_enabled, forward_text
+        FROM user_group_modes
+        WHERE user_id=? AND source_chat=?
+    """, (user_id, source_chat))
+
+    override = cursor.fetchone()
+
+    if override:
+        user_anon_mode, user_forward_enabled, _ = override
+        if user_forward_enabled == 0:
+            return
+    else:
+        user_anon_mode = 0
+
+    for target_chat, route_mode in routes:
+
+        final_mode = user_anon_mode if user_anon_mode != 0 else route_mode
+
+        try:
+            if final_mode == 0:
+                # Normal forward (keeps album grouping)
+                for msg in messages:
+                    bot.forward_message(target_chat, source_chat, msg.message_id)
+
+            else:
+                media_list = []
+
+                for i, msg in enumerate(messages):
+
+                    caption = msg.caption if (i == 0 and final_mode == 1) else None
+
+                    if msg.content_type == "photo":
+                        media_list.append(
+                            InputMediaPhoto(msg.photo[-1].file_id, caption=caption)
+                        )
+
+                    elif msg.content_type == "video":
+                        media_list.append(
+                            InputMediaVideo(msg.video.file_id, caption=caption)
+                        )
+
+                    elif msg.content_type == "document":
+                        media_list.append(
+                            InputMediaDocument(msg.document.file_id, caption=caption)
+                        )
+
+                if media_list:
+                    bot.send_media_group(target_chat, media_list)
+
+        except Exception as e:
+            print("Album Forward Error:", e)    
+    # ---- Linking Confirmation Logic ----
+    if message.text and message.text.startswith("/"):
+        return
+
+    # Confirm source
+    if link_state["from"] == source_chat and not link_state["from_confirmed"]:
+        link_state["from_confirmed"] = True
+        bot.send_message(source_chat, "Source confirmed.")
+        return
+
+    # Confirm target
+    if link_state["target"] == source_chat and not link_state["target_confirmed"]:
+        link_state["target_confirmed"] = True
+        bot.send_message(source_chat, "Target confirmed.")
+        return
+
+    # If both confirmed → create route
+    if link_state["from_confirmed"] and link_state["target_confirmed"]:
+
+        cursor.execute(
+            "INSERT INTO routes (source_chat, target_chat, anon_mode) VALUES (?, ?, 0)",
+            (link_state["from"], link_state["target"])
+        )
+        conn.commit()
+
+        bot.send_message(link_state["target"], "Route created successfully.")
+
+        # Reset link state
+        link_state["from"] = None
+        link_state["target"] = None
+        link_state["from_confirmed"] = False
+        link_state["target_confirmed"] = False
+
+        return
 # ===== FORWARDING ENGINE =====
 
 @bot.message_handler(func=lambda message: True, content_types=[
     'text','photo','video','document','audio','voice','animation'
 ])
 def forward_engine(message):
+        # ---- Album Handling ----
+    if message.media_group_id:
+
+        group_id = message.media_group_id
+
+        if group_id not in album_buffer:
+            album_buffer[group_id] = []
+
+        album_buffer[group_id].append(message)
+
+        # Wait briefly to collect all album items
+        import threading
+
+        def process_album():
+            import time
+            time.sleep(1)
+
+            messages = album_buffer.pop(group_id, [])
+
+            if not messages:
+                return
+
+            process_media_group(messages)
+
+        threading.Thread(target=process_album).start()
+        return
     # ---- Ignore Bot Messages (Anti-loop) ----
     if message.from_user and message.from_user.is_bot:
         return
