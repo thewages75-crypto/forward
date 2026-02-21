@@ -56,8 +56,14 @@ cursor.execute("INSERT OR IGNORE INTO settings VALUES ('forwarding_enabled','1')
 conn.commit()
 # ===== ACCESS CONTROL HELPERS =====
 
+# ===== GLOBAL FORWARDING CHECK =====
+
+def is_global_forwarding_enabled():
+    cursor.execute("SELECT value FROM settings WHERE key='forwarding_enabled'")
+    return cursor.fetchone()[0] == '1'
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
 
 
 def is_user_approved(user_id):
@@ -191,6 +197,34 @@ def close_system(message):
     conn.commit()
 
     bot.reply_to(message, "System is now CLOSED.")
+    
+# ===== ADMIN GLOBAL STOP =====
 
+@bot.message_handler(commands=['global_stop'])
+def global_stop(message):
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    cursor.execute("UPDATE settings SET value='0' WHERE key='forwarding_enabled'")
+    conn.commit()
+
+    bot.reply_to(message, "Global forwarding DISABLED.")
+# ===== ADMIN GLOBAL START =====
+
+@bot.message_handler(commands=['global_start'])
+def global_start(message):
+    if message.chat.type != "private":
+        return
+
+    if not is_admin(message.from_user.id):
+        return
+
+    cursor.execute("UPDATE settings SET value='1' WHERE key='forwarding_enabled'")
+    conn.commit()
+
+    bot.reply_to(message, "Global forwarding ENABLED.")
 print("Bot is running...")
 bot.infinity_polling()
