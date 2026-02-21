@@ -530,37 +530,43 @@ def start_command(message):
         return
 
     user_id = message.from_user.id
+    markup = InlineKeyboardMarkup()
 
-    # Admin always approved
+    # ---- ADMIN ----
     if is_admin(user_id):
-        status_text = "👑 Admin"
 
-    else:
-        cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
-        row = cursor.fetchone()
+        text = """
+📡 Forwarding System
 
-        status_text = "❌ Not Registered"
+Status: 👑 Admin
 
-        if row:
-            if row[0] == 1:
-                status_text = "✅ Approved"
-            else:
-                status_text = "⏳ Pending Approval"
+You have full control over the system.
+"""
+        bot.send_message(message.chat.id, text)
+        return
+
+    # ---- NORMAL USER ----
+    cursor.execute("SELECT approved FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+
+    status_text = "❌ Not Registered"
+
+    if row:
+        if row[0] == 1:
+            status_text = "✅ Approved"
+        else:
+            status_text = "⏳ Pending Approval"
 
     text = f"""
 📡 Forwarding System
 
 Status: {status_text}
-
-This bot forwards media between configured groups.
-
-To use the system, you must request access.
 """
 
-    markup = InlineKeyboardMarkup()
-
     if not row and is_registration_open():
-        markup.add(InlineKeyboardButton("Request Access", callback_data="request_access"))
+        markup.add(
+            InlineKeyboardButton("Request Access", callback_data="request_access")
+        )
 
     if not is_registration_open():
         text += "\n\n🚫 Registration is currently closed."
