@@ -1,12 +1,16 @@
+import os
 import telebot
 import psycopg2
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ================= CONFIG =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-BOT_TOKEN = "8052676385:AAEtbmDGuJrEMDOnaMLtL--r1FcxePLjZRs"
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN not set")
 
-ADMIN_ID = 7949704649
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL not set")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
