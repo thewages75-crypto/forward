@@ -43,6 +43,7 @@ conn.commit()
 
 print("Database connected successfully.")
 # ================= UTIL =================
+admin_state = {}
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -113,8 +114,8 @@ def callback_handler(call):
         markup.add(InlineKeyboardButton("📋 View Mappings", callback_data="view_maps"))
         bot.send_message(call.message.chat.id, "Admin Panel", reply_markup=markup)
     elif call.data == "add_map" and is_admin(user_id):
-        bot.send_message(call.message.chat.id,
-                         "Send mapping in this format:\n\nsource_id target_id")
+        admin_state[user_id] = {"step": "source"}
+        bot.send_message(call.message.chat.id, "Send SOURCE group/channel ID:")
     elif call.data == "view_maps" and is_admin(user_id):
         cur.execute("SELECT id, source_id, target_id, active FROM mappings")
         rows = cur.fetchall()
@@ -130,24 +131,41 @@ def callback_handler(call):
 @bot.message_handler(func=lambda message: is_admin(message.from_user.id))
 def handle_admin_input(message):
 
-    try:
-        parts = message.text.split()
-        if len(parts) != 2:
-            return
+    user_id = message.from_user.id
 
-        source_id = int(parts[0])
-        target_id = int(parts[1])
+    if user_id not in admin_state:
+        return
 
-        cur.execute(
-            "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
-            (source_id, target_id)
-        )
-        conn.commit()
+    state = admin_state[user_id]
 
-        bot.reply_to(message, "Mapping added successfully.")
+    # Step 1: Get source
+    if state["step"] == "source":
+        try:
+            source_id = int(message.text)
+            admin_state[user_id]["source"] = source_id
+            admin_state[user_id]["step"] = "target"
+            bot.reply_to(message, "Now send TARGET group/channel ID:")
+        except:
+            bot.reply_to(message, "Invalid ID. Send numeric SOURCE ID.")
 
-    except:
-        pass        
+    # Step 2: Get target
+    elif state["step"] == "target":
+        try:
+            target_id = int(message.text)
+            source_id = admin_state[user_id]["source"]
+
+            cur.execute(
+                "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
+                (source_id, target_id)
+            )
+            conn.commit()
+
+            bot.reply_to(message, "Mapping added successfully.")
+
+            del admin_state[user_id]
+
+        except:
+            bot.reply_to(message, "Invalid ID. Send numeric TARGET ID.")       
 MEDIA_TYPES = ["photo", "video", "document", "audio", "voice", "animation"]
 
 @bot.message_handler(content_types=MEDIA_TYPES)
