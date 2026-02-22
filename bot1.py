@@ -2,7 +2,10 @@ import os
 import telebot
 import psycopg2
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from collections import defaultdict
+import time
 
+media_groups = defaultdict(list)
 # ================= CONFIG =================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -21,6 +24,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 conn = psycopg2.connect(DATABASE_URL, sslmode="require")
 cur = conn.cursor()
 
+# ================= RUNTIME STATE =================
+admin_state = {}
+
+# ================= UTIL FUNCTIONS =================
+def is_admin(user_id):
+    return user_id == ADMIN_ID
 # ================= TABLES =================
 
 cur.execute("""
@@ -205,7 +214,7 @@ def handle_admin_input(message):
                      f"Mapping created successfully.\n\nSource: {source_id}\nTarget: {target_id}")
 
         del admin_state[user_id]
-MEDIA_TYPES = ["photo", "video", "document", "audio", "voice", "animation"]
+MEDIA_TYPES = ["photo", "video", "document", "audio"]
 
 @bot.message_handler(content_types=MEDIA_TYPES)
 def forward_media(message):
@@ -216,20 +225,69 @@ def forward_media(message):
     )
     result = cur.fetchone()
 
-    if result:
-        map_id, target_id = result
+    if not result:
+        return
 
+    map_id, target_id = result
+
+    # If message is part of album
+    if message.media_group_id:
+
+        media_groups[message.media_group_id].append(message)
+
+        # Wait briefly to collect full album
+        time.sleep(1)
+
+        # Only process once
+        if len(media_groups[message.media_group_id]) > 0:
+
+            album = media_groups.pop(message.media_group_id)
+
+            media_list = []
+
+            for msg in album:
+                if msg.content_type == "photo":
+                    media_list.append(
+                        telebot.types.InputMediaPhoto(
+                            msg.photo[-1].file_id,
+                            caption=msg.caption if msg.caption else None
+                        )
+                    )
+
+                elif msg.content_type == "video":
+                    media_list.append(
+                        telebot.types.InputMediaVideo(
+                            msg.video.file_id,
+                            caption=msg.caption if msg.caption else None
+                        )
+                    )
+
+            try:
+                bot.send_media_group(target_id, media_list)
+
+                cur.execute(
+                    "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
+                    (map_id,)
+                )
+                conn.commit()
+
+                print("Album forwarded")
+
+            except Exception as e:
+                print("Album forward error:", e)
+
+    else:
+        # Single media (normal case)
         try:
             bot.copy_message(target_id, message.chat.id, message.message_id)
 
-            # increase forward counter
             cur.execute(
                 "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
                 (map_id,)
             )
             conn.commit()
 
-            print("Forwarded successfully")
+            print("Single media forwarded")
 
         except Exception as e:
             print("Forward error:", e)
