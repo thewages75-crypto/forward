@@ -115,7 +115,8 @@ def callback_handler(call):
         bot.send_message(call.message.chat.id, "Admin Panel", reply_markup=markup)
     elif call.data == "add_map" and is_admin(user_id):
         admin_state[user_id] = {"step": "source"}
-        bot.send_message(call.message.chat.id, "Send SOURCE group/channel ID:")
+        bot.send_message(call.message.chat.id,
+                        "Forward ANY message from the SOURCE group/channel.")
     elif call.data == "view_maps" and is_admin(user_id):
         cur.execute("SELECT id, source_id, target_id, active FROM mappings")
         rows = cur.fetchall()
@@ -138,51 +139,36 @@ def handle_admin_input(message):
 
     state = admin_state[user_id]
 
-    # Step 1: Get source
+    # Make sure message is forwarded
+    if not message.forward_from_chat:
+        bot.reply_to(message, "Please forward a message from the group/channel.")
+        return
+
+    chat_id = message.forward_from_chat.id
+
+    # STEP 1 — GET SOURCE
     if state["step"] == "source":
-        try:
-            source_id = int(message.text)
-            admin_state[user_id]["source"] = source_id
-            admin_state[user_id]["step"] = "target"
-            bot.reply_to(message, "Now send TARGET group/channel ID:")
-        except:
-            bot.reply_to(message, "Invalid ID. Send numeric SOURCE ID.")
+        admin_state[user_id]["source"] = chat_id
+        admin_state[user_id]["step"] = "target"
 
-    # Step 2: Get target
+        bot.reply_to(message,
+                     f"Source saved: {chat_id}\n\nNow forward a message from TARGET group/channel.")
+
+    # STEP 2 — GET TARGET
     elif state["step"] == "target":
-        try:
-            target_id = int(message.text)
-            source_id = admin_state[user_id]["source"]
 
-            cur.execute(
-                "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
-                (source_id, target_id)
-            )
-            conn.commit()
+        source_id = admin_state[user_id]["source"]
+        target_id = chat_id
 
-            bot.reply_to(message, "Mapping added successfully.")
+        cur.execute(
+            "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
+            (source_id, target_id)
+        )
+        conn.commit()
 
-            del admin_state[user_id]
+        bot.reply_to(message,
+                     f"Mapping created successfully.\n\nSource: {source_id}\nTarget: {target_id}")
 
-        except:
-            bot.reply_to(message, "Invalid ID. Send numeric TARGET ID.")       
-MEDIA_TYPES = ["photo", "video", "document", "audio", "voice", "animation"]
-
-@bot.message_handler(content_types=MEDIA_TYPES)
-def forward_media(message):
-
-    cur.execute(
-        "SELECT target_id FROM mappings WHERE source_id=%s AND active=TRUE",
-        (message.chat.id,)
-    )
-    result = cur.fetchone()
-
-    if result:
-        target_id = result[0]
-        try:
-            bot.copy_message(target_id, message.chat.id, message.message_id)
-            print("Forwarded successfully")
-        except Exception as e:
-            print("Forward error:", e)
+        del admin_state[user_id]
 print("Bot started...")
 bot.infinity_polling(skip_pending=True)
