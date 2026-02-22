@@ -5,7 +5,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # ================= CONFIG =================
 
 BOT_TOKEN = "8052676385:AAEtbmDGuJrEMDOnaMLtL--r1FcxePLjZRs"
-DATABASE_URL = "YOUR_DATABASE_URL"
+
 ADMIN_ID = 7949704649
 
 bot = telebot.TeleBot(BOT_TOKEN)
