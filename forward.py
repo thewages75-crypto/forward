@@ -6,6 +6,8 @@ BOT_TOKEN = "8330293981:AAFTEqKOPNMQtonlVE-xnomlPzsAXVVd-Pg"
 ADMIN_ID = 8352768379  # your telegram id
 
 bot = telebot.TeleBot(BOT_TOKEN)
+conn = sqlite3.connect("forward.db", check_same_thread=False)
+cursor = conn.cursor()
 
 # ===== DATABASE SETUP =====
 # ----- USERS TABLE -----
