@@ -280,7 +280,6 @@ def forward_media(message):
                 )
                 conn.commit()
 
-                print("Album forwarded")
 
             except Exception as e:
                 print("Album forward error:", e)
@@ -324,8 +323,6 @@ def forward_media(message):
                 (file_id, message.chat.id)
             )
             conn.commit()
-
-            print("Forwarded and logged.")
 
         except Exception as e:
             print("Forward error:", e)
