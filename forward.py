@@ -141,6 +141,9 @@ def add_route(message):
     conn.commit()
 
     bot.reply_to(message, f"Route added:\n{source_chat} → {target_chat}\nMode: {mode}")
+@bot.message_handler(func=lambda m: True)
+def get_id(m):
+    print("Group ID:", m.chat.id)
 # ===== ADMIN REMOVE ROUTE =====
 
 @bot.message_handler(commands=['removeroute'])
