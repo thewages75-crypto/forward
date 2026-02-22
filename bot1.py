@@ -153,12 +153,6 @@ MEDIA_TYPES = ["photo", "video", "document", "audio", "voice", "animation"]
 @bot.message_handler(content_types=MEDIA_TYPES)
 def forward_media(message):
 
-    # Check user approved
-    status = get_user_status(message.from_user.id)
-    if status != "approved":
-        return
-
-    # Check mapping
     cur.execute(
         "SELECT target_id FROM mappings WHERE source_id=%s AND active=TRUE",
         (message.chat.id,)
@@ -169,6 +163,7 @@ def forward_media(message):
         target_id = result[0]
         try:
             bot.copy_message(target_id, message.chat.id, message.message_id)
+            print("Forwarded successfully")
         except Exception as e:
             print("Forward error:", e)
 print("Bot started...")
