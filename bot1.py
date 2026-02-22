@@ -51,6 +51,14 @@ cur.execute("""
 ALTER TABLE mappings
 ADD COLUMN IF NOT EXISTS forward_count BIGINT DEFAULT 0
 """)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS media_logs (
+    file_id TEXT PRIMARY KEY,
+    source_id BIGINT,
+    forwarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+conn.commit()
 conn.commit()
 
 conn.commit()
@@ -278,16 +286,45 @@ def forward_media(message):
 
     else:
         # Single media (normal case)
+        # Get file_id depending on type
+        file_id = None
+
+        if message.content_type == "photo":
+            file_id = message.photo[-1].file_id
+
+        elif message.content_type == "video":
+            file_id = message.video.file_id
+
+        elif message.content_type == "document":
+            file_id = message.document.file_id
+
+        elif message.content_type == "audio":
+            file_id = message.audio.file_id
+
+        # If no file_id, skip
+        if not file_id:
+            return
+
+        # Check duplicate
+        cur.execute("SELECT file_id FROM media_logs WHERE file_id=%s", (file_id,))
+        exists = cur.fetchone()
+
+        if exists:
+            print("Duplicate detected, skipping.")
+            return
+
+        # Forward
         try:
             bot.copy_message(target_id, message.chat.id, message.message_id)
 
+            # Store file_id
             cur.execute(
-                "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
-                (map_id,)
+                "INSERT INTO media_logs (file_id, source_id) VALUES (%s, %s)",
+                (file_id, message.chat.id)
             )
             conn.commit()
 
-            print("Single media forwarded")
+            print("Forwarded and logged.")
 
         except Exception as e:
             print("Forward error:", e)
