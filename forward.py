@@ -203,8 +203,8 @@ def request_access(message):
         ADMIN_ID,
         f"Access request from user: {user_id}"
     )
-@bot.message_handler(func=lambda id: True)
-def get_id(id):
+@bot.message_handler(func=lambda get: True)
+def get_id(get):
     print("Group ID:", m.chat.id)
 # ===== ADMIN APPROVE USER =====
 
