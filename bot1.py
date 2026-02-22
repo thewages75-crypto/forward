@@ -66,8 +66,7 @@ def start(message):
 
     bot.send_message(message.chat.id, "Welcome to Media Router Bot", reply_markup=markup)
 
-print("Bot started...")
-bot.infinity_polling(skip_pending=True)
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
@@ -108,3 +107,69 @@ def callback_handler(call):
 
         bot.send_message(call.message.chat.id, f"User {target_user} approved.")
         bot.send_message(target_user, "Your access has been approved.")
+    elif call.data == "admin_panel" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("➕ Add Mapping", callback_data="add_map"))
+        markup.add(InlineKeyboardButton("📋 View Mappings", callback_data="view_maps"))
+        bot.send_message(call.message.chat.id, "Admin Panel", reply_markup=markup)
+    elif call.data == "add_map" and is_admin(user_id):
+        bot.send_message(call.message.chat.id,
+                         "Send mapping in this format:\n\nsource_id target_id")
+    elif call.data == "view_maps" and is_admin(user_id):
+        cur.execute("SELECT id, source_id, target_id, active FROM mappings")
+        rows = cur.fetchall()
+
+        if not rows:
+            bot.send_message(call.message.chat.id, "No mappings found.")
+        else:
+            for row in rows:
+                bot.send_message(
+                    call.message.chat.id,
+                    f"ID: {row[0]}\nSource: {row[1]}\nTarget: {row[2]}\nActive: {row[3]}"
+                )        
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id))
+def handle_admin_input(message):
+
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            return
+
+        source_id = int(parts[0])
+        target_id = int(parts[1])
+
+        cur.execute(
+            "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
+            (source_id, target_id)
+        )
+        conn.commit()
+
+        bot.reply_to(message, "Mapping added successfully.")
+
+    except:
+        pass        
+MEDIA_TYPES = ["photo", "video", "document", "audio", "voice", "animation"]
+
+@bot.message_handler(content_types=MEDIA_TYPES)
+def forward_media(message):
+
+    # Check user approved
+    status = get_user_status(message.from_user.id)
+    if status != "approved":
+        return
+
+    # Check mapping
+    cur.execute(
+        "SELECT target_id FROM mappings WHERE source_id=%s AND active=TRUE",
+        (message.chat.id,)
+    )
+    result = cur.fetchone()
+
+    if result:
+        target_id = result[0]
+        try:
+            bot.copy_message(target_id, message.chat.id, message.message_id)
+        except Exception as e:
+            print("Forward error:", e)
+print("Bot started...")
+bot.infinity_polling(skip_pending=True)
