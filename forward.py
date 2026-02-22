@@ -8,10 +8,6 @@ ADMIN_ID = 8352768379  # your telegram id
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ===== DATABASE SETUP =====
-
-conn = sqlite3.connect("forward.db", check_same_thread=False)
-cursor = conn.cursor()
-
 # ----- USERS TABLE -----
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -207,6 +203,9 @@ def request_access(message):
         ADMIN_ID,
         f"Access request from user: {user_id}"
     )
+@bot.message_handler(func=lambda id: True)
+def get_id(id):
+    print("Group ID:", m.chat.id)
 # ===== ADMIN APPROVE USER =====
 
 @bot.message_handler(commands=['approve'])
