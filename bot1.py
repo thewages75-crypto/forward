@@ -181,7 +181,8 @@ def callback_handler(call):
         bot.send_message(
             call.message.chat.id,
             f"Total mappings: {total_maps}\nTotal forwards: {total_forwards}"
-        )@bot.message_handler(func=lambda message: is_admin(message.from_user.id))
+        )
+@bot.message_handler(func=lambda message: is_admin(message.from_user.id))
 def handle_admin_input(message):
 
     user_id = message.from_user.id
