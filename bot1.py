@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS message_map (
 """)
 conn.commit()
 cur.execute("""
+CREATE TABLE IF NOT EXISTS user_stats (
+    user_id BIGINT PRIMARY KEY,
+    file_count BIGINT DEFAULT 0
+)
+""")
+conn.commit()
+cur.execute("""
 ALTER TABLE mappings
 ADD COLUMN IF NOT EXISTS forward_count BIGINT DEFAULT 0
 """)
@@ -123,9 +130,12 @@ def admin_reply_control(message):
 
     markup = InlineKeyboardMarkup()
     markup.add(
-        InlineKeyboardButton("ℹ️ Info", callback_data=f"info_{replied_msg_id}"),
-        InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{replied_msg_id}"),
-        InlineKeyboardButton("🚫 Ban", callback_data=f"ban_{replied_msg_id}")
+    InlineKeyboardButton("ℹ️ Info", callback_data=f"info_{replied_msg_id}"),
+    InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{replied_msg_id}")
+    )
+    markup.add(
+        InlineKeyboardButton("🚫 Ban", callback_data=f"ban_{replied_msg_id}"),
+        InlineKeyboardButton("✅ Unban", callback_data=f"unban_{replied_msg_id}")
     )
 
     bot.send_message(chat_id, "Admin Action:", reply_markup=markup)
@@ -203,10 +213,33 @@ def callback_handler(call):
 
         result = cur.fetchone()
 
-        if result:
-            user_id_real = result[0]
-            bot.send_message(call.message.chat.id, f"Original User ID: {user_id_real}")
+        if not result:
+            bot.answer_callback_query(call.id, "No data found")
+            return
 
+        real_user_id = result[0]
+
+        # Get user stats
+        cur.execute("SELECT file_count FROM user_stats WHERE user_id=%s", (real_user_id,))
+        stats = cur.fetchone()
+        file_count = stats[0] if stats else 0
+
+        try:
+            chat_member = bot.get_chat_member(call.message.chat.id, real_user_id)
+            username = chat_member.user.username
+            first_name = chat_member.user.first_name
+        except:
+            username = None
+            first_name = "Unknown"
+
+        bot.send_message(
+            call.message.chat.id,
+            f"👤 User Info\n\n"
+            f"ID: {real_user_id}\n"
+            f"Name: {first_name}\n"
+            f"Username: @{username if username else 'No username'}\n"
+            f"Files Shared: {file_count}"
+        )
     elif call.data.startswith("delete_") and is_admin(user_id):
 
         msg_id = int(call.data.split("_")[1])
@@ -228,6 +261,28 @@ def callback_handler(call):
             user_id_real = result[0]
             bot.ban_chat_member(call.message.chat.id, user_id_real)
             bot.send_message(call.message.chat.id, f"User {user_id_real} banned.")
+    elif call.data.startswith("unban_") and is_admin(user_id):
+
+        msg_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+        SELECT user_id FROM message_map
+        WHERE target_chat_id=%s AND target_msg_id=%s
+        """, (call.message.chat.id, msg_id))
+
+        result = cur.fetchone()
+
+        if not result:
+            bot.answer_callback_query(call.id, "User not found")
+            return
+
+        real_user_id = result[0]
+
+        try:
+            bot.unban_chat_member(call.message.chat.id, real_user_id)
+            bot.send_message(call.message.chat.id, f"User {real_user_id} unbanned.")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"Unban error: {e}")
     # ================= TOGGLE ACTION =================
     elif call.data.startswith("toggle_") and is_admin(user_id):
 
@@ -406,6 +461,13 @@ def forward_media(message):
                 sent.message_id,
                 message.from_user.id
             ))
+            conn.commit()
+            cur.execute("""
+            INSERT INTO user_stats (user_id, file_count)
+            VALUES (%s, 1)
+            ON CONFLICT (user_id)
+            DO UPDATE SET file_count = user_stats.file_count + 1
+            """, (message.from_user.id,))
             conn.commit()
 
             # Store file_id
