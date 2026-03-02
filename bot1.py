@@ -585,8 +585,9 @@ def forward_media(message):
 
         # Forward
         try:
-            sent = bot.copy_message(target_id, message.chat.id, message.message_id)
-
+            sent_messages = bot.copy_message(target_id, media_list)
+            if not sent_messages:
+                return
             # Save tracking
             for sent in sent_messages:
                 cur.execute("""
@@ -602,12 +603,11 @@ def forward_media(message):
                     album[0].media_group_id,
                     target_id
                 ))
-            conn.commit()
 
             # Store file_id
             cur.execute(
-                "INSERT INTO media_logs (file_id, source_id) VALUES (%s, %s)",
-                (file_id, message.chat.id)
+                "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
+                (map_id,)
             )
             conn.commit()
 
