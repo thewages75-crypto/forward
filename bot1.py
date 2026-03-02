@@ -48,16 +48,6 @@ CREATE TABLE IF NOT EXISTS mappings (
 )
 """)
 cur.execute("""
-CREATE TABLE IF NOT EXISTS message_map (
-    source_chat_id BIGINT,
-    source_msg_id BIGINT,
-    target_chat_id BIGINT,
-    target_msg_id BIGINT,
-    user_id BIGINT
-)
-""")
-conn.commit()
-cur.execute("""
 ALTER TABLE mappings
 ADD COLUMN IF NOT EXISTS forward_count BIGINT DEFAULT 0
 """)
@@ -68,6 +58,40 @@ CREATE TABLE IF NOT EXISTS media_logs (
     forwarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS forward_tracking (
+    receiver_message_id BIGINT PRIMARY KEY,
+    original_user_id BIGINT,
+    original_username TEXT,
+    mapping_id BIGINT
+)
+""")
+cur.execute("""
+CREATE TABLE IF NOT EXISTS message_map (
+    source_chat_id BIGINT,
+    source_msg_id BIGINT,
+    target_chat_id BIGINT,
+    target_msg_id BIGINT,
+    user_id BIGINT
+)
+""")
+conn.commit()
+cur.execute("""
+ALTER TABLE forward_tracking
+ADD COLUMN IF NOT EXISTS media_group_id TEXT
+""")
+conn.commit()
+cur.execute("""
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE
+""")
+conn.commit()
+cur.execute("""
+ALTER TABLE forward_tracking
+ADD COLUMN IF NOT EXISTS target_chat_id BIGINT
+""")
+conn.commit()
+conn.commit()
 conn.commit()
 conn.commit()
 
@@ -98,37 +122,175 @@ def start(message):
         markup.add(InlineKeyboardButton("📊 My Status", callback_data="my_status"))
 
     bot.send_message(message.chat.id, "Welcome to Media Router Bot", reply_markup=markup)
+@bot.message_handler(func=lambda m: m.reply_to_message is not None and is_admin(m.from_user.id))
+def admin_reply_lookup(message):
 
-@bot.message_handler(func=lambda m: m.reply_to_message is not None)
-def admin_reply_control(message):
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id, original_username
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        return
+
+    user_id, username = data
+
+    # Count total media
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    total_media = cur.fetchone()[0]
+
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_{user_id}"),
+        InlineKeyboardButton("🗑 Delete All", callback_data=f"delete_{user_id}")
+    )
+    markup.add(
+        InlineKeyboardButton("📊 History", callback_data=f"history_{user_id}")
+    )
+
+    bot.reply_to(
+        message,
+        f"👤 @{username if username else 'No Username'}\n"
+        f"🆔 {user_id}\n"
+        f"📦 Total Media: {total_media}",
+        reply_markup=markup
+    )
+@bot.message_handler(commands=['info'])
+def info_command(message):
 
     if not is_admin(message.from_user.id):
         return
 
-    chat_id = message.chat.id
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
     replied_msg_id = message.reply_to_message.message_id
 
     cur.execute("""
-    SELECT user_id FROM message_map
-    WHERE target_chat_id=%s AND target_msg_id=%s
-    """, (chat_id, replied_msg_id))
+        SELECT original_user_id, original_username
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
 
-    result = cur.fetchone()
-
-    if not result:
-        print("No mapping found for this reply")
+    if not data:
+        bot.reply_to(message, "No tracked data found.")
         return
 
-    print("Admin reply detected for mapped message")
+    user_id, username = data
 
-    markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("ℹ️ Info", callback_data=f"info_{replied_msg_id}"),
-        InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{replied_msg_id}"),
-        InlineKeyboardButton("🚫 Ban", callback_data=f"ban_{replied_msg_id}")
+    # Get ban status
+    cur.execute("SELECT banned FROM users WHERE user_id=%s", (user_id,))
+    row = cur.fetchone()
+    banned = row[0] if row else False
+
+    # Count total media
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    total_media = cur.fetchone()[0]
+
+    status_text = "🚫 BANNED" if banned else "✅ ACTIVE"
+
+    bot.reply_to(
+        message,
+        f"👤 Username: @{username if username else 'No Username'}\n"
+        f"🆔 User ID: {user_id}\n"
+        f"📦 Total Media: {total_media}\n"
+        f"📌 Status: {status_text}"
     )
+@bot.message_handler(commands=['ban'])
+def ban_command(message):
 
-    bot.send_message(chat_id, "Admin Action:", reply_markup=markup)
+    if not is_admin(message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        bot.reply_to(message, "No tracked user found.")
+        return
+
+    user_id = data[0]
+
+    cur.execute("""
+        INSERT INTO users (user_id, banned)
+        VALUES (%s, TRUE)
+        ON CONFLICT (user_id)
+        DO UPDATE SET banned=TRUE
+    """, (user_id,))
+    conn.commit()
+
+    bot.reply_to(message, f"🚫 User {user_id} banned successfully.")
+@bot.message_handler(commands=['delete'])
+def delete_command(message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        bot.reply_to(message, "No tracked user found.")
+        return
+
+    user_id = data[0]
+
+    cur.execute("""
+        SELECT receiver_message_id, target_chat_id
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    
+    rows = cur.fetchall()
+
+    deleted = 0
+
+    for msg_id, chat_id in rows:
+        try:
+            bot.delete_message(chat_id, msg_id)
+            deleted += 1
+        except:
+            pass
+
+    bot.reply_to(message, f"🗑 Deleted {deleted} messages.")
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
@@ -192,42 +354,7 @@ def callback_handler(call):
                     f"ID: {row[0]}\nSource: {row[1]}\nActive: {row[2]}",
                     reply_markup=markup
                 )
-    elif call.data.startswith("info_") and is_admin(user_id):
 
-        msg_id = int(call.data.split("_")[1])
-
-        cur.execute("""
-        SELECT user_id FROM message_map
-        WHERE target_chat_id=%s AND target_msg_id=%s
-        """, (call.message.chat.id, msg_id))
-
-        result = cur.fetchone()
-
-        if result:
-            user_id_real = result[0]
-            bot.send_message(call.message.chat.id, f"Original User ID: {user_id_real}")
-
-    elif call.data.startswith("delete_") and is_admin(user_id):
-
-        msg_id = int(call.data.split("_")[1])
-        bot.delete_message(call.message.chat.id, msg_id)
-        bot.answer_callback_query(call.id, "Deleted.")
-
-    elif call.data.startswith("ban_") and is_admin(user_id):
-
-        msg_id = int(call.data.split("_")[1])
-
-        cur.execute("""
-        SELECT user_id FROM message_map
-        WHERE target_chat_id=%s AND target_msg_id=%s
-        """, (call.message.chat.id, msg_id))
-
-        result = cur.fetchone()
-
-        if result:
-            user_id_real = result[0]
-            bot.ban_chat_member(call.message.chat.id, user_id_real)
-            bot.send_message(call.message.chat.id, f"User {user_id_real} banned.")
     # ================= TOGGLE ACTION =================
     elif call.data.startswith("toggle_") and is_admin(user_id):
 
@@ -242,7 +369,60 @@ def callback_handler(call):
 
         bot.send_message(call.message.chat.id,
                          f"Mapping {map_id} active = {new_status}")
+    elif call.data.startswith("ban_") and is_admin(call.from_user.id):
 
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            INSERT INTO users (user_id, banned)
+            VALUES (%s, TRUE)
+            ON CONFLICT (user_id)
+            DO UPDATE SET banned=TRUE
+        """, (user_id,))
+        conn.commit()
+
+        bot.answer_callback_query(call.id, "User banned.")
+    elif call.data.startswith("delete_") and is_admin(call.from_user.id):
+
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            SELECT receiver_message_id, target_chat_id
+            FROM forward_tracking
+            WHERE original_user_id=%s
+        """, (user_id,))
+        
+        rows = cur.fetchall()
+
+        deleted = 0
+
+        for msg_id, chat_id in rows:
+            try:
+                bot.delete_message(chat_id, msg_id)
+                deleted += 1
+            except:
+                pass
+
+        bot.answer_callback_query(call.id, f"Deleted {deleted} messages.")
+    elif call.data.startswith("history_") and is_admin(call.from_user.id):
+
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            SELECT COUNT(*), MIN(receiver_message_id)
+            FROM forward_tracking
+            WHERE original_user_id=%s
+        """, (user_id,))
+        
+        total, first_msg = cur.fetchone()
+
+        bot.send_message(
+            call.message.chat.id,
+            f"📊 User History\n\n"
+            f"🆔 {user_id}\n"
+            f"📦 Total Media: {total}\n"
+            f"📌 First Message ID: {first_msg}"
+        )
     # ================= STATS =================
     elif call.data == "stats" and is_admin(user_id):
 
@@ -301,17 +481,26 @@ MEDIA_TYPES = ["photo", "video", "document", "audio"]
 
 @bot.message_handler(content_types=MEDIA_TYPES)
 def forward_media(message):
+    # Check if user banned
+    cur.execute("SELECT banned FROM users WHERE user_id=%s", (message.from_user.id,))
+    row = cur.fetchone()
+
+    if row and row[0] is True:
+        print("Banned user tried to send media.")
+        return
 
     cur.execute(
-        "SELECT id, target_id FROM mappings WHERE source_id=%s AND active=TRUE",
-        (message.chat.id,)
+    "SELECT id, target_id FROM mappings WHERE source_id=%s AND active=TRUE",
+    (message.chat.id,)
     )
     result = cur.fetchone()
 
-    if not result:
+    if not result or len(result) < 2:
+        print("Invalid mapping result:", result)
         return
 
-    map_id, target_id = result
+    map_id = result[0]
+    target_id = result[1]
 
     # If message is part of album
     if message.media_group_id:
@@ -346,7 +535,25 @@ def forward_media(message):
                     )
 
             try:
-                bot.send_media_group(target_id, media_list)
+                sent = bot.copy_message(target_id, message.chat.id, message.message_id)
+
+                cur.execute("""
+                INSERT INTO forward_tracking
+                (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (receiver_message_id) DO NOTHING
+                """, (
+                    sent.message_id,
+                    message.from_user.id,
+                    message.from_user.username,
+                    map_id,
+                    None,              # single media has no album
+                    target_id
+                ))
+                conn.commit()
+
+            except Exception as e:
+                print("Album forward error:", e)
 
                 cur.execute(
                     "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
@@ -388,44 +595,33 @@ def forward_media(message):
 
         # Forward
         try:
-            sent = bot.copy_message(
-                target_id,
-                message.chat.id,
-                message.message_id
-            )
-
-            # Store mapping
-            cur.execute("""
-            INSERT INTO message_map
-            (source_chat_id, source_msg_id, target_chat_id, target_msg_id, user_id)
-            VALUES (%s, %s, %s, %s, %s)
-            """, (
-                message.chat.id,
-                message.message_id,
-                target_id,
-                sent.message_id,
-                message.from_user.id
-            ))
-            conn.commit()
+            sent_messages = bot.copy_message(target_id, media_list)
+            if not sent_messages:
+                return
+            # Save tracking
+            for sent in sent_messages:
+                cur.execute("""
+                INSERT INTO forward_tracking
+                (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (receiver_message_id) DO NOTHING
+                """, (
+                    sent.message_id,
+                    album[0].from_user.id,
+                    album[0].from_user.username,
+                    map_id,
+                    album[0].media_group_id,
+                    target_id
+                ))
 
             # Store file_id
             cur.execute(
-                "INSERT INTO media_logs (file_id, source_id) VALUES (%s, %s)",
-                (file_id, message.chat.id)
+                "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
+                (map_id,)
             )
             conn.commit()
 
         except Exception as e:
             print("Forward error:", e)
-@bot.message_handler(func=lambda m: m.reply_to_message is not None)
-def admin_reply_control(message):
-
-    print("Reply detected")
-
-    if not is_admin(message.from_user.id):
-        print("Not admin")
-        return
-
-    print("Admin confirmed")
 print("Bot started...")
 bot.infinity_polling(skip_pending=True)
