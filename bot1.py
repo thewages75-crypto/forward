@@ -58,6 +58,30 @@ CREATE TABLE IF NOT EXISTS media_logs (
     forwarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS forward_tracking (
+    receiver_message_id BIGINT PRIMARY KEY,
+    original_user_id BIGINT,
+    original_username TEXT,
+    mapping_id BIGINT
+)
+""")
+cur.execute("""
+ALTER TABLE forward_tracking
+ADD COLUMN IF NOT EXISTS media_group_id TEXT
+""")
+conn.commit()
+cur.execute("""
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE
+""")
+conn.commit()
+cur.execute("""
+ALTER TABLE forward_tracking
+ADD COLUMN IF NOT EXISTS target_chat_id BIGINT
+""")
+conn.commit()
+conn.commit()
 conn.commit()
 conn.commit()
 
@@ -88,8 +112,48 @@ def start(message):
         markup.add(InlineKeyboardButton("📊 My Status", callback_data="my_status"))
 
     bot.send_message(message.chat.id, "Welcome to Media Router Bot", reply_markup=markup)
+@bot.message_handler(func=lambda m: m.reply_to_message is not None and is_admin(m.from_user.id))
+def admin_reply_lookup(message):
 
+    replied_msg_id = message.reply_to_message.message_id
 
+    cur.execute("""
+        SELECT original_user_id, original_username
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        return
+
+    user_id, username = data
+
+    # Count total media
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    total_media = cur.fetchone()[0]
+
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_{user_id}"),
+        InlineKeyboardButton("🗑 Delete All", callback_data=f"delete_{user_id}")
+    )
+    markup.add(
+        InlineKeyboardButton("📊 History", callback_data=f"history_{user_id}")
+    )
+
+    bot.reply_to(
+        message,
+        f"👤 @{username if username else 'No Username'}\n"
+        f"🆔 {user_id}\n"
+        f"📦 Total Media: {total_media}",
+        reply_markup=markup
+    )
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
@@ -168,7 +232,60 @@ def callback_handler(call):
 
         bot.send_message(call.message.chat.id,
                          f"Mapping {map_id} active = {new_status}")
+    elif call.data.startswith("ban_") and is_admin(call.from_user.id):
 
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            INSERT INTO users (user_id, banned)
+            VALUES (%s, TRUE)
+            ON CONFLICT (user_id)
+            DO UPDATE SET banned=TRUE
+        """, (user_id,))
+        conn.commit()
+
+        bot.answer_callback_query(call.id, "User banned.")
+    elif call.data.startswith("delete_") and is_admin(call.from_user.id):
+
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            SELECT receiver_message_id, target_chat_id
+            FROM forward_tracking
+            WHERE original_user_id=%s
+        """, (user_id,))
+        
+        rows = cur.fetchall()
+
+        deleted = 0
+
+        for msg_id, chat_id in rows:
+            try:
+                bot.delete_message(chat_id, msg_id)
+                deleted += 1
+            except:
+                pass
+
+        bot.answer_callback_query(call.id, f"Deleted {deleted} messages.")
+    elif call.data.startswith("history_") and is_admin(call.from_user.id):
+
+        user_id = int(call.data.split("_")[1])
+
+        cur.execute("""
+            SELECT COUNT(*), MIN(receiver_message_id)
+            FROM forward_tracking
+            WHERE original_user_id=%s
+        """, (user_id,))
+        
+        total, first_msg = cur.fetchone()
+
+        bot.send_message(
+            call.message.chat.id,
+            f"📊 User History\n\n"
+            f"🆔 {user_id}\n"
+            f"📦 Total Media: {total}\n"
+            f"📌 First Message ID: {first_msg}"
+        )
     # ================= STATS =================
     elif call.data == "stats" and is_admin(user_id):
 
@@ -227,6 +344,13 @@ MEDIA_TYPES = ["photo", "video", "document", "audio"]
 
 @bot.message_handler(content_types=MEDIA_TYPES)
 def forward_media(message):
+    # Check if user banned
+    cur.execute("SELECT banned FROM users WHERE user_id=%s", (message.from_user.id,))
+    row = cur.fetchone()
+
+    if row and row[0] is True:
+        print("Banned user tried to send media.")
+        return
 
     cur.execute(
         "SELECT id, target_id FROM mappings WHERE source_id=%s AND active=TRUE",
@@ -272,14 +396,39 @@ def forward_media(message):
                     )
 
             try:
-                bot.send_media_group(target_id, media_list)
+                sent_messages = bot.send_media_group(target_id, media_list)
+
+                # Save tracking for EACH message in album
+                for sent in sent_messages:
+                    cur.execute("""
+                    INSERT INTO forward_tracking 
+                    (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (receiver_message_id) DO NOTHING
+                    """, (
+                        sent.message_id,
+                        album[0].from_user.id,
+                        album[0].from_user.username,
+                        map_id,
+                        album[0].media_group_id
+                    ))
+
+                # Increase forward counter
+                cur.execute(
+                    "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
+                    (map_id,)
+                )
+
+                conn.commit()
+
+            except Exception as e:
+                print("Album forward error:", e)
 
                 cur.execute(
                     "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
                     (map_id,)
                 )
                 conn.commit()
-
 
             except Exception as e:
                 print("Album forward error:", e)
@@ -315,7 +464,21 @@ def forward_media(message):
 
         # Forward
         try:
-            bot.copy_message(target_id, message.chat.id, message.message_id)
+            sent = bot.copy_message(target_id, message.chat.id, message.message_id)
+
+            # Save tracking
+            cur.execute("""
+            IINSERT INTO forward_tracking 
+            (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (receiver_message_id) DO NOTHING
+            """, (
+                sent.message_id,
+                message.from_user.id,
+                message.from_user.username,
+                map_id
+            ))
+            conn.commit()
 
             # Store file_id
             cur.execute(
