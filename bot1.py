@@ -525,29 +525,21 @@ def forward_media(message):
                     )
 
             try:
-                sent_messages = bot.send_media_group(target_id, media_list)
+                sent = bot.copy_message(target_id, message.chat.id, message.message_id)
 
-                # Save tracking for EACH message in album
-                for sent in sent_messages:
-                    cur.execute("""
-                    INSERT INTO forward_tracking 
-                    (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (receiver_message_id) DO NOTHING
-                    """, (
-                        sent.message_id,
-                        album[0].from_user.id,
-                        album[0].from_user.username,
-                        map_id,
-                        album[0].media_group_id
-                    ))
-
-                # Increase forward counter
-                cur.execute(
-                    "UPDATE mappings SET forward_count = forward_count + 1 WHERE id=%s",
-                    (map_id,)
-                )
-
+                cur.execute("""
+                INSERT INTO forward_tracking
+                (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (receiver_message_id) DO NOTHING
+                """, (
+                    sent.message_id,
+                    message.from_user.id,
+                    message.from_user.username,
+                    map_id,
+                    None,              # single media has no album
+                    target_id
+                ))
                 conn.commit()
 
             except Exception as e:
@@ -596,17 +588,20 @@ def forward_media(message):
             sent = bot.copy_message(target_id, message.chat.id, message.message_id)
 
             # Save tracking
-            cur.execute("""
-            IINSERT INTO forward_tracking 
-            (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (receiver_message_id) DO NOTHING
-            """, (
-                sent.message_id,
-                message.from_user.id,
-                message.from_user.username,
-                map_id
-            ))
+            for sent in sent_messages:
+                cur.execute("""
+                INSERT INTO forward_tracking
+                (receiver_message_id, original_user_id, original_username, mapping_id, media_group_id, target_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (receiver_message_id) DO NOTHING
+                """, (
+                    sent.message_id,
+                    album[0].from_user.id,
+                    album[0].from_user.username,
+                    map_id,
+                    album[0].media_group_id,
+                    target_id
+                ))
             conn.commit()
 
             # Store file_id
