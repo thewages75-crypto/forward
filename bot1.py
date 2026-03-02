@@ -480,15 +480,17 @@ def forward_media(message):
         return
 
     cur.execute(
-        "SELECT id, target_id FROM mappings WHERE source_id=%s AND active=TRUE",
-        (message.chat.id,)
+    "SELECT id, target_id FROM mappings WHERE source_id=%s AND active=TRUE",
+    (message.chat.id,)
     )
     result = cur.fetchone()
 
-    if not result:
+    if not result or len(result) < 2:
+        print("Invalid mapping result:", result)
         return
 
-    map_id, target_id = result
+    map_id = result[0]
+    target_id = result[1]
 
     # If message is part of album
     if message.media_group_id:
