@@ -99,19 +99,15 @@ def start(message):
 
     bot.send_message(message.chat.id, "Welcome to Media Router Bot", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(func=lambda m: m.reply_to_message is not None)
 def admin_reply_control(message):
 
     if not is_admin(message.from_user.id):
         return
 
-    if not message.reply_to_message:
-        return
-
-    replied_msg_id = message.reply_to_message.message_id
     chat_id = message.chat.id
+    replied_msg_id = message.reply_to_message.message_id
 
-    # Check if this message exists in mapping
     cur.execute("""
     SELECT user_id FROM message_map
     WHERE target_chat_id=%s AND target_msg_id=%s
@@ -120,14 +116,15 @@ def admin_reply_control(message):
     result = cur.fetchone()
 
     if not result:
+        print("No mapping found for this reply")
         return
+
+    print("Admin reply detected for mapped message")
 
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("ℹ️ Info", callback_data=f"info_{replied_msg_id}"),
-        InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{replied_msg_id}")
-    )
-    markup.add(
+        InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{replied_msg_id}"),
         InlineKeyboardButton("🚫 Ban", callback_data=f"ban_{replied_msg_id}")
     )
 
