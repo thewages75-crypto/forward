@@ -417,5 +417,15 @@ def forward_media(message):
 
         except Exception as e:
             print("Forward error:", e)
+@bot.message_handler(func=lambda m: m.reply_to_message is not None)
+def admin_reply_control(message):
+
+    print("Reply detected")
+
+    if not is_admin(message.from_user.id):
+        print("Not admin")
+        return
+
+    print("Admin confirmed")
 print("Bot started...")
 bot.infinity_polling(skip_pending=True)
