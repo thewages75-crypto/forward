@@ -154,6 +154,133 @@ def admin_reply_lookup(message):
         f"📦 Total Media: {total_media}",
         reply_markup=markup
     )
+@bot.message_handler(commands=['info'])
+def info_command(message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id, original_username
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        bot.reply_to(message, "No tracked data found.")
+        return
+
+    user_id, username = data
+
+    # Get ban status
+    cur.execute("SELECT banned FROM users WHERE user_id=%s", (user_id,))
+    row = cur.fetchone()
+    banned = row[0] if row else False
+
+    # Count total media
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    total_media = cur.fetchone()[0]
+
+    status_text = "🚫 BANNED" if banned else "✅ ACTIVE"
+
+    bot.reply_to(
+        message,
+        f"👤 Username: @{username if username else 'No Username'}\n"
+        f"🆔 User ID: {user_id}\n"
+        f"📦 Total Media: {total_media}\n"
+        f"📌 Status: {status_text}"
+    )
+@bot.message_handler(commands=['ban'])
+def ban_command(message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        bot.reply_to(message, "No tracked user found.")
+        return
+
+    user_id = data[0]
+
+    cur.execute("""
+        INSERT INTO users (user_id, banned)
+        VALUES (%s, TRUE)
+        ON CONFLICT (user_id)
+        DO UPDATE SET banned=TRUE
+    """, (user_id,))
+    conn.commit()
+
+    bot.reply_to(message, f"🚫 User {user_id} banned successfully.")
+@bot.message_handler(commands=['delete'])
+def delete_command(message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(message, "Reply to a forwarded message.")
+        return
+
+    replied_msg_id = message.reply_to_message.message_id
+
+    cur.execute("""
+        SELECT original_user_id
+        FROM forward_tracking
+        WHERE receiver_message_id=%s
+    """, (replied_msg_id,))
+    
+    data = cur.fetchone()
+
+    if not data:
+        bot.reply_to(message, "No tracked user found.")
+        return
+
+    user_id = data[0]
+
+    cur.execute("""
+        SELECT receiver_message_id, target_chat_id
+        FROM forward_tracking
+        WHERE original_user_id=%s
+    """, (user_id,))
+    
+    rows = cur.fetchall()
+
+    deleted = 0
+
+    for msg_id, chat_id in rows:
+        try:
+            bot.delete_message(chat_id, msg_id)
+            deleted += 1
+        except:
+            pass
+
+    bot.reply_to(message, f"🗑 Deleted {deleted} messages.")
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
