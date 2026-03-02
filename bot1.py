@@ -342,10 +342,13 @@ def handle_admin_input(message):
         source_id = admin_state[user_id]["source"]
         target_id = chat_id
 
-        cur.execute(
-            "INSERT INTO mappings (source_id, target_id, active) VALUES (%s, %s, TRUE)",
-            (source_id, target_id)
-        )
+        cur.execute("""
+        INSERT INTO mappings (source_id, target_id, active)
+        VALUES (%s, %s, TRUE)
+        ON CONFLICT (source_id)
+        DO UPDATE SET target_id = EXCLUDED.target_id,
+                    active = TRUE
+        """, (source_id, target_id))
         conn.commit()
 
         bot.reply_to(message,
